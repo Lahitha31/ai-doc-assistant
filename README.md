@@ -5,11 +5,6 @@
 A lightweight Retrieval-Augmented Generation (RAG) app that indexes your \*\*PDF/TXT/MD\*\* files into \*\*FAISS\*\* and serves answers via \*\*FastAPI\*\*. CPU-friendly defaults (FLAN-T5) so it runs locally without a GPU.
 
 
-
-https://github.com/YOUR\_USERNAME/YOUR\_REPO  <!-- replace after you push -->
-
-
-
 ---
 
 
