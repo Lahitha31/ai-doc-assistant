@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu
+pydantic
+python-dotenv
+ragas
+datasets
+tiktoken
+pypdf
+transformers

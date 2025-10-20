@@ -1,0 +1,17 @@
+name: ai-doc-assistant
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - fastapi
+      - uvicorn[standard]
+      - langchain
+      - langchain-community
+      - langchain-huggingface
+      - sentence-transformers
+      - faiss-cpu
+      - pydantic
+      - python-dotenv

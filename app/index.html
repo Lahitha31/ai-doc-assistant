@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AI Document Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#0b1020;color:#e7eaf6}
+    .row{display:grid;grid-template-columns:1fr auto;gap:10px;max-width:900px}
+    input{padding:12px 14px;border-radius:10px;border:1px solid #2a3568;background:#0f1633;color:#e7eaf6}
+    button{padding:12px 18px;border-radius:10px;border:1px solid #2f3a74;background:#7aa2ff;color:#061333;font-weight:600;cursor:pointer}
+    #answer{margin-top:16px;max-width:900px;line-height:1.55;background:#121834;border:1px solid #26305e;border-radius:12px;padding:14px}
+    #status{margin-top:8px;color:#b5bedc}
+  </style>
+</head>
+<body>
+  <h2>AI Document Assistant</h2>
+
+  <!-- Ask -->
+  <div class="row">
+    <input id="q" type="text" placeholder="Type your question… e.g., When is PG DATA 2026?" />
+    <button id="askBtn">Ask</button>
+  </div>
+
+  <!-- Upload + Reload -->
+  <div style="margin-top:12px; display:flex; gap:12px; align-items:center; max-width:900px;">
+    <input id="files" type="file" multiple accept=".pdf,.txt,.md" />
+    <button id="uploadBtn">Upload & Reindex</button>
+    <button id="reloadBtn">Re-Load Documents</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="answer"></div>
+
+  <script>
+    const q = document.getElementById('q');
+    const askBtn = document.getElementById('askBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const reloadBtn = document.getElementById('reloadBtn');
+    const filesInput = document.getElementById('files');
+    const statusEl = document.getElementById('status');
+    const out = document.getElementById('answer');
+
+    function setStatus(msg){ statusEl.textContent = msg || ""; }
+    function showAnswer(text){ out.textContent = text; }
+
+    async function ask() {
+      const question = (q.value || '').trim();
+      if (!question) { setStatus("Please type a question."); return; }
+      setStatus("Thinking…"); showAnswer("");
+      try{
+        const res = await fetch("http://localhost:8000/ask", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({question})
+        });
+        const data = await res.json();
+        showAnswer(data.error ? `Error: ${data.error}` : (data.answer || "(no answer)"));
+      } catch(e){ showAnswer("Network error: " + e.message); }
+      finally { setStatus(""); }
+    }
+
+    async function reloadIndex() {
+      setStatus("Rebuilding index…");
+      try{
+        const res = await fetch("http://localhost:8000/reload", { method:"POST" });
+        const data = await res.json();
+        setStatus(data.status === "indexed" ? "Index rebuilt ✅" : ("Error: " + (data.error||"")));
+      } catch(e){ setStatus("Network error: " + e.message); }
+    }
+
+    async function uploadAndReindex() {
+      const files = filesInput.files;
+      if (!files || files.length === 0) { setStatus("Choose .pdf/.txt/.md files first."); return; }
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+
+      setStatus("Uploading…");
+      try{
+        const res = await fetch("http://localhost:8000/upload", { method:"POST", body: fd });
+        const data = await res.json();
+        if (data.status === "ok") {
+          setStatus("Uploaded & reindexed ✅");
+        } else {
+          setStatus("Error: " + (data.error || "upload failed"));
+        }
+      } catch(e){ setStatus("Network error: " + e.message); }
+    }
+
+    askBtn.addEventListener('click', ask);
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+    reloadBtn.addEventListener('click', reloadIndex);
+    uploadBtn.addEventListener('click', uploadAndReindex);
+  </script>
+</body>

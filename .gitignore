@@ -1,0 +1,44 @@
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# FAISS index files
+indexes/
+*.faiss
+*.pkl
+
+# Uploaded documents
+data/
+data/*
+
+# Model cache
+.cache/
+huggingface/
+hf_cache/
+transformers_cache/
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+*.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
