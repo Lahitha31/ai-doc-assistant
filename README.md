@@ -38,7 +38,7 @@ Most AI chatbots hallucinate or provide vague answers when it comes to private o
 
 ---
 
-## Getting Started (Local Setup)
+## Local Setup
 
 ```bash
 # Create a virtual environment
