@@ -1,114 +1,55 @@
-\# AI Document Assistant · RAG + FAISS + FastAPI (CPU-Friendly)
+# AI Document Assistant Retrieval-Augmented Generation (RAG) App
 
-
-
-A lightweight Retrieval-Augmented Generation (RAG) app that indexes your \*\*PDF/TXT/MD\*\* files into \*\*FAISS\*\* and serves answers via \*\*FastAPI\*\*. CPU-friendly defaults (FLAN-T5) so it runs locally without a GPU.
-
-
----
-
-
-
-\##Features
-
-
-
-\- \*\*Upload \& Reindex\*\* from the browser (no CLI needed)
-
-\- \*\*RAG pipeline\*\*: HuggingFace embeddings + FAISS retriever + T5 generator
-
-\- \*\*Simple Web UI\*\* (one input, one answer box)
-
-\- \*\*Sources shown\*\* under each answer (filename + snippet)
-
-\- \*\*/debug/search\*\* endpoint to inspect what chunks were retrieved
-
-\- \*\*Windows-friendly\*\* setup and commands
+This project is a lightweight AI-powered document assistant that allows users to upload their own files (PDF, TXT, Markdown) and ask natural language questions about them. Instead of using a chatbot with general internet knowledge, this system provides **accurate, document-grounded answers** using Retrieval-Augmented Generation (RAG).
 
 
 
 ---
 
+##  Why I Built This
 
+Most AI chatbots hallucinate or provide vague answers when it comes to private or enterprise data. This project solves that problem by:
 
-\## Tech Stack
+- **Indexing custom user documents**
+- **Searching using FAISS vector database**
+- **Retrieving relevant chunks using embeddings**
+- **Generating concise answers using a local language model (FLAN-T5)**
 
+---
 
+##  Key Features
 
-\- \*\*Backend\*\*: FastAPI, Uvicorn
-
-\- \*\*RAG\*\*: FAISS, sentence-transformers (all-MiniLM-L6-v2), Hugging Face pipelines
-
-\- \*\*Frontend\*\*: Minimal HTML/JS (no framework)
-
-\- \*\*Optional\*\*: RAGAS for eval (already wired in the codebase as a utility)
-
+-  **Upload your own files** directly from the browser
+-  **One-click reindexing** (no terminal required)
+-  **Ask any question and get grounded, source-backed answers**
+-  **Uses Retrieval-Augmented Generation (RAG)** for higher accuracy
+-  **Supports evaluation and debugging** through a built-in `/debug/search` endpoint
 
 
 ---
 
+## How It Works (Simple Overview)
 
+1. You upload documents through the web interface
+2. The system splits them into chunks and converts those chunks into embeddings
+3. FAISS stores these embeddings for fast vector similarity search
+4. When you ask a question, the system retrieves the most relevant chunks
+5. The language model generates a focused answer using only those chunks (reducing hallucinations)
 
-\## Quick Start (Windows / PowerShell)
+---
 
+## Getting Started (Local Setup)
 
-
-```powershell
-
-git clone https://github.com/YOUR\_USERNAME/YOUR\_REPO.git
-
-cd YOUR\_REPO
-
-
-
+```bash
+# Create a virtual environment
 python -m venv .venv
+.venv\Scripts\Activate   # Windows
 
-.venv\\Scripts\\Activate
-
-
-
+# Install dependencies
 pip install -r requirements.txt
 
-##How to Use
+# (Optional) Place documents in the data/ folder or use the web upload
+python -m app.ingest     # Builds the search index
 
-
-
-Open http://localhost:8000/
-
-
-
-Type a question → Ask
-
-
-
-To add docs:
-
-
-
-Click Upload \& Reindex (supports multiple files), or
-
-
-
-Drop files into ./data/ and click Re-Load Documents
-
-
-
-Answers show below with Sources for transparency
-
-
-
-
-
-
-
-##Troubleshooting
-
-Weird characters (’ shows as â€™): use browser UI; PowerShell may show legacy encoding.
-
-Answers from old docs: Click Re-Load Documents or call POST /reload (rebuild index).
-
-Uploads not appearing: Check server logs; supported types: .pdf, .txt, .md.
-
-FAISS or sentence-transformers errors: run
-pip install --upgrade pip setuptools wheel
-pip install sentence-transformers faiss-cpu
+# Run the app
+uvicorn app.main:app --reload --port 8000
