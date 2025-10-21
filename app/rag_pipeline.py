@@ -1,71 +1,130 @@
 from pathlib import Path
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_huggingface import HuggingFacePipeline
+from typing import List
 from transformers import pipeline
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
+from langchain_community.vectorstores import FAISS
 from app.settings import settings
 
-def get_vectorstore():
-    emb = HuggingFaceEmbeddings(model_name=settings.HF_EMBED_MODEL)
-    idx_dir = Path(settings.INDEX_DIR)
-    vs = FAISS.load_local(str(idx_dir), emb, allow_dangerous_deserialization=True) if idx_dir.exists() else None
-    return vs, emb
 
-def build_llm():
-    text_gen = pipeline(
-        "text2text-generation",
-        model=settings.HF_TEXT_GEN_MODEL,
-        device=-1,       # Force CPU
-        max_new_tokens=128
-    )
-    return HuggingFacePipeline(pipeline=text_gen)
+def _format_context(docs) -> str:
+    """Compact, de-duplicated context fed to the LLM."""
+    parts: List[str] = []
+    seen = set()
+    for d in docs:
+        text = (d.page_content or "").strip()
+        # avoid dumping identical chunks
+        key = text[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        src = (d.metadata or {}).get("filename") or (d.metadata or {}).get("source") or "unknown"
+        page = (d.metadata or {}).get("page")
+        tag = f"[{src}{f' p.{page}' if page is not None else ''}]"
+        parts.append(f"{tag}\n{text}")
+    return "\n\n---\n\n".join(parts)
 
-
-def get_prompt():
-    sys = ("You are a helpful assistant. Use ONLY the provided context. "
-           "If the answer is not in the context, say you don't know.")
-    return ChatPromptTemplate.from_messages([
-        ("system", sys),
-        ("human", "Question: {question}\n\nContext:\n{context}")
-    ])
-
-def format_context(docs):
-    return "\n\n".join([d.page_content for d in docs])
 
 class RAGPipeline:
+    """
+    Minimal RAG pipeline:
+      - Loads FAISS index with HF embeddings
+      - Retrieves with Max Marginal Relevance (MMR) to reduce duplicates
+      - Generates concise answers with a text2text LLM (e.g., FLAN-T5)
+    """
+
     def __init__(self):
-        self.vs, self.emb = get_vectorstore()
-        if self.vs is None:
-            raise RuntimeError("No FAISS index found. Run ingest first.")
-        self.llm = build_llm()
-        self.prompt = get_prompt()
+        # Embeddings + Vector store
+        self.embeddings = HuggingFaceEmbeddings(model_name=settings.HF_EMBED_MODEL)
 
-    def retrieve(self, query, k=None):
+        index_dir = Path(settings.INDEX_DIR)
+        if not index_dir.exists():
+            raise RuntimeError(
+                f"Index not found in {index_dir}. Run ingestion first: `python -m app.ingest`"
+            )
+
+        # allow_dangerous_deserialization=True is needed for FAISS load on newer langchain versions
+        self.vs = FAISS.load_local(
+            str(index_dir),
+            self.embeddings,
+            allow_dangerous_deserialization=True,
+        )
+
+        # LLM
+        self.llm = self.build_llm()
+
+        # Prompt template (short & anti-repetition)
+        self.prompt_template = (
+            "You are a helpful assistant. Use ONLY the context below.\n"
+            "Answer concisely in 1–3 sentences. Do not repeat lines or phrases.\n"
+            "If the answer is not contained in the context, say you don't know.\n\n"
+            "Context:\n{context}\n\n"
+            "Question: {question}\n"
+            "Answer:"
+        )
+
+
+    # LLM
+  
+    def build_llm(self):
+        """
+        Build a Hugging Face text-generation pipeline and wrap it for LangChain.
+        CPU mode uses device=-1. For GPU, set device=0.
+        """
+        text_gen = pipeline(
+            "text2text-generation",
+            model=settings.HF_TEXT_GEN_MODEL,  # e.g., "google/flan-t5-base"
+            device=-1,
+        )
+
+        # Wrap HF pipeline so we can call llm.invoke(prompt_text)
+        llm = HuggingFacePipeline(
+            pipeline=text_gen,
+            model_kwargs={
+                "max_new_tokens": 128,
+                "num_beams": 4,
+                "no_repeat_ngram_size": 3,
+                "repetition_penalty": 1.2,
+                "early_stopping": True,
+            },
+        )
+        return llm
+
+  
+    # Retrieval
+  
+    def retrieve(self, question: str, k: int | None = None):
+        """
+        Retrieve with MMR to reduce near-duplicate chunks in the final context.
+        """
         k = k or settings.TOP_K
-        return self.vs.similarity_search(query, k=k)
+        return self.vs.max_marginal_relevance_search(
+            question, k=k, fetch_k=20, lambda_mult=0.6
+        )
 
-    def answer(self, question):
+    
+    # Answer
+ 
+    def answer(self, question: str):
         docs = self.retrieve(question)
-        ctx = format_context(docs)
-        prompt_text = self.prompt.format(question=question, context=ctx)
-        out = self.llm.invoke(prompt_text)
+        context = _format_context(docs)
+        prompt_text = self.prompt_template.format(context=context, question=question)
 
-        # build neat sources list
+        # HuggingFacePipeline.invoke returns a string
+        out = self.llm.invoke(prompt_text)
+        answer_text = out if isinstance(out, str) else str(out)
+
+        # Build neat sources list for the UI
         sources = []
         for d in docs:
             meta = d.metadata or {}
-            snippet = d.page_content[:180].replace("\n", " ").strip()
-            sources.append({
-                "file": meta.get("source", "unknown"),
-                "page": meta.get("page", None),
-                "snippet": snippet + ("…" if len(d.page_content) > 180 else "")
-            })
+            fname = meta.get("filename") or meta.get("source", "unknown")
+            page = meta.get("page", None)
+            snippet_raw = (d.page_content or "").replace("\n", " ").strip()
+            snippet = (snippet_raw[:180] + "…") if len(snippet_raw) > 180 else snippet_raw
+            sources.append({"file": fname, "page": page, "snippet": snippet})
 
         return {
-            "answer": out,
+            "answer": answer_text,
             "sources": sources,
-            "meta": {"k": settings.TOP_K}
+            "meta": {"k": settings.TOP_K},
         }
-
-
