@@ -1,0 +1,174 @@
+[1mdiff --git a/app/ingest.py b/app/ingest.py[m
+[1mindex b6a9487..b208764 100644[m
+[1m--- a/app/ingest.py[m
+[1m+++ b/app/ingest.py[m
+[36m@@ -1,22 +1,42 @@[m
+[32m+[m[32mfrom ftfy import fix_text[m
+ from pathlib import Path[m
+[32m+[m[32mfrom shutil import rmtree[m
+ from langchain_community.document_loaders import PyPDFLoader, TextLoader[m
+ from langchain_text_splitters import RecursiveCharacterTextSplitter[m
+ from langchain_community.vectorstores import FAISS[m
+[31m-from langchain_community.embeddings import HuggingFaceEmbeddings[m
+[32m+[m[32mfrom langchain_huggingface import HuggingFaceEmbeddings[m
+[32m+[m[32mfrom langchain_core.documents import Document[m
+ from app.settings import settings[m
+ [m
+[32m+[m[32mdef normalize_text(t: str) -> str:[m
+[32m+[m[32m    # fix mojibake (â€™ etc.) and collapse whitespace[m
+[32m+[m[32m    t = fix_text(t)[m
+[32m+[m[32m    return " ".join(t.split())[m
+[32m+[m
+ def load_documents(data_dir):[m
+     docs = [][m
+[31m-    for p in Path(data_dir).glob("**/*"):[m
+[32m+[m[32m    data_path = Path(data_dir)[m
+[32m+[m[32m    for p in data_path.glob("**/*"):[m
+         if p.is_dir():[m
+             continue[m
+         ext = p.suffix.lower()[m
+         if ext == ".pdf":[m
+[31m-            docs += PyPDFLoader(str(p)).load()[m
+[32m+[m[32m            loaded = PyPDFLoader(str(p)).load()[m
+[32m+[m[32m            for d in loaded:[m
+[32m+[m[32m                d.page_content = normalize_text(d.page_content)[m
+[32m+[m[32m            docs += loaded[m
+         elif ext in {".txt", ".md"}:[m
+[31m-            docs += TextLoader(str(p), encoding="utf-8").load()[m
+[32m+[m[32m            try:[m
+[32m+[m[32m                loaded = TextLoader(str(p), autodetect_encoding=True).load()[m
+[32m+[m[32m            except Exception:[m
+[32m+[m[32m                text = p.read_text(encoding="utf-8", errors="ignore")[m
+[32m+[m[32m                loaded = [Document(page_content=text, metadata={"source": str(p)})][m
+[32m+[m[32m            for d in loaded:[m
+[32m+[m[32m                d.page_content = normalize_text(d.page_content)[m
+[32m+[m[32m            docs += loaded[m
+     return docs[m
+ [m
+[32m+[m
+ def build_index():[m
+     docs = load_documents(settings.DATA_DIR)[m
+     if not docs:[m
+[1mdiff --git a/app/rag_pipeline.py b/app/rag_pipeline.py[m
+[1mindex 88566c3..522447e 100644[m
+[1m--- a/app/rag_pipeline.py[m
+[1m+++ b/app/rag_pipeline.py[m
+[36m@@ -1,71 +1,130 @@[m
+ from pathlib import Path[m
+[31m-from langchain_community.vectorstores import FAISS[m
+[31m-from langchain_community.embeddings import HuggingFaceEmbeddings[m
+[31m-from langchain_huggingface import HuggingFacePipeline[m
+[32m+[m[32mfrom typing import List[m
+ from transformers import pipeline[m
+[31m-from langchain_core.prompts import ChatPromptTemplate[m
+[32m+[m[32mfrom langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline[m
+[32m+[m[32mfrom langchain_community.vectorstores import FAISS[m
+ from app.settings import settings[m
+ [m
+[31m-def get_vectorstore():[m
+[31m-    emb = HuggingFaceEmbeddings(model_name=settings.HF_EMBED_MODEL)[m
+[31m-    idx_dir = Path(settings.INDEX_DIR)[m
+[31m-    vs = FAISS.load_local(str(idx_dir), emb, allow_dangerous_deserialization=True) if idx_dir.exists() else None[m
+[31m-    return vs, emb[m
+[31m-[m
+[31m-def build_llm():[m
+[31m-    text_gen = pipeline([m
+[31m-        "text2text-generation",[m
+[31m-        model=settings.HF_TEXT_GEN_MODEL,[m
+[31m-        device=-1,       # Force CPU[m
+[31m-        max_new_tokens=128[m
+[31m-    )[m
+[31m-    return HuggingFacePipeline(pipeline=text_gen)[m
+[31m-[m
+[31m-[m
+[31m-def get_prompt():[m
+[31m-    sys = ("You are a helpful assistant. Use ONLY the provided context. "[m
+[31m-           "If the answer is not in the context, say you don't know.")[m
+[31m-    return ChatPromptTemplate.from_messages([[m
+[31m-        ("system", sys),[m
+[31m-        ("human", "Question: {question}\n\nContext:\n{context}")[m
+[31m-    ])[m
+[31m-[m
+[31m-def format_context(docs):[m
+[31m-    return "\n\n".join([d.page_content for d in docs])[m
+[32m+[m
+[32m+[m[32mdef _format_context(docs) -> str:[m
+[32m+[m[32m    """Compact, de-duplicated context fed to the LLM."""[m
+[32m+[m[32m    parts: List[str] = [][m
+[32m+[m[32m    seen = set()[m
+[32m+[m[32m    for d in docs:[m
+[32m+[m[32m        text = (d.page_content or "").strip()[m
+[32m+[m[32m        # avoid dumping identical chunks[m
+[32m+[m[32m        key = text[:120][m
+[32m+[m[32m        if key in seen:[m
+[32m+[m[32m            continue[m
+[32m+[m[32m        seen.add(key)[m
+[32m+[m[32m        src = (d.metadata or {}).get("filename") or (d.metadata or {}).get("source") or "unknown"[m
+[32m+[m[32m        page = (d.metadata or {}).get("page")[m
+[32m+[m[32m        tag = f"[{src}{f' p.{page}' if page is not None else ''}]"[m
+[32m+[m[32m        parts.append(f"{tag}\n{text}")[m
+[32m+[m[32m    return "\n\n---\n\n".join(parts)[m
+[32m+[m
+ [m
+ class RAGPipeline:[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Minimal RAG pipeline:[m
+[32m+[m[32m      - Loads FAISS index with HF embeddings[m
+[32m+[m[32m      - Retrieves with Max Marginal Relevance (MMR) to reduce duplicates[m
+[32m+[m[32m      - Generates concise answers with a text2text LLM (e.g., FLAN-T5)[m
+[32m+[m[32m    """[m
+[32m+[m
+     def __init__(self):[m
+[31m-        self.vs, self.emb = get_vectorstore()[m
+[31m-        if self.vs is None:[m
+[31m-            raise RuntimeError("No FAISS index found. Run ingest first.")[m
+[31m-        self.llm = build_llm()[m
+[31m-        self.prompt = get_prompt()[m
+[32m+[m[32m        # Embeddings + Vector store[m
+[32m+[m[32m        self.embeddings = HuggingFaceEmbeddings(model_name=settings.HF_EMBED_MODEL)[m
+[32m+[m
+[32m+[m[32m        index_dir = Path(settings.INDEX_DIR)[m
+[32m+[m[32m        if not index_dir.exists():[m
+[32m+[m[32m            raise RuntimeError([m
+[32m+[m[32m                f"Index not found in {index_dir}. Run ingestion first: `python -m app.ingest`"[m
+[32m+[m[32m            )[m
+[32m+[m
+[32m+[m[32m        # allow_dangerous_deserialization=True is needed for FAISS load on newer langchain versions[m
+[32m+[m[32m        self.vs = FAISS.load_local([m
+[32m+[m[32m            str(index_dir),[m
+[32m+[m[32m            self.embeddings,[m
+[32m+[m[32m            allow_dangerous_deserialization=True,[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        # LLM[m
+[32m+[m[32m        self.llm = self.build_llm()[m
+ [m
+[31m-    def retrieve(self, query, k=None):[m
+[32m+[m[32m        # Prompt template (short & anti-repetition)[m
+[32m+[m[32m        self.prompt_template = ([m
+[32m+[m[32m            "You are a helpful assistant. Use ONLY the context below.\n"[m
+[32m+[m[32m            "Answer concisely in 1–3 sentences. Do not repeat lines or phrases.\n"[m
+[32m+[m[32m            "If the answer is not contained in the context, say you don't know.\n\n"[m
+[32m+[m[32m            "Context:\n{context}\n\n"[m
+[32m+[m[32m            "Question: {question}\n"[m
+[32m+[m[32m            "Answer:"[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m
+[32m+[m[32m    # LLM[m
+[32m+[m[41m  [m
+[32m+[m[32m    def build_llm(self):[m
+[32m+[m[32m        """[m
+[32m+[m[32m        Build a Hugging Face text-generation pipeline and wrap it for LangChain.[m
+[32m+[m[32m        CPU mode uses device=-1. For GPU, set device=0.[m
+[32m+[m[32m        """[m
+[32m+[m[32m        text_gen = pipeline([m
+[32m+[m[32m            "text2text-generation",[m
+[32m+[m[32m            model=settings.HF_TEXT_GEN_MODEL,  # e.g., "google/flan-t5-base"[m
+[32m+[m[32m            device=-1,[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        # Wrap HF pipeline so we can call llm.invoke(prompt_text)[m
+[32m+[m[32m        llm = HuggingFacePipeline([m
+[32m+[m[32m            pipeline=text_gen,[m
+[32m+[m[32m        
